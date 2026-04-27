@@ -20,6 +20,7 @@ body {
   margin: 0;
   font-family: "Manrope", sans-serif;
   color: var(--ink);
+  overflow-x: hidden;
   background:
     radial-gradient(90rem 60rem at 80% -10%, #bcebe2 0%, transparent 45%),
     radial-gradient(80rem 50rem at -10% 110%, #c8dcff 0%, transparent 50%),
@@ -145,6 +146,7 @@ body {
 }
 
 .pipeline-kpis article {
+  min-width: 0;
   border: 1px solid rgba(22, 34, 41, 0.11);
   border-radius: 12px;
   background: #fff;
@@ -163,6 +165,8 @@ body {
   display: block;
   margin-top: 6px;
   font-size: 0.98rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .pipeline-runs table {
@@ -230,6 +234,7 @@ body {
 
 .hero-actions {
   min-width: 320px;
+  max-width: 100%;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: 16px;
@@ -321,6 +326,7 @@ body {
 }
 
 .kpi-card {
+  min-width: 0; /* Prevent grid blowout */
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: 16px;
@@ -340,6 +346,8 @@ body {
   display: block;
   font-size: 1.5rem;
   margin-top: 8px;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .kpi-card small {
@@ -369,6 +377,7 @@ body {
 }
 
 .panel {
+  min-width: 0; /* Prevent grid blowout from wide table content */
   background: var(--panel);
   border: 1px solid var(--panel-line);
   border-radius: 18px;
@@ -449,6 +458,8 @@ body {
 
 .table-wrap {
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
 }
 
 table {
@@ -585,6 +596,7 @@ th {
 }
 
 .analysis-card {
+  min-width: 0; /* Prevent grid blowout */
   border-radius: 18px;
   border: 1px solid rgba(22, 34, 41, 0.11);
   background: rgba(255, 255, 255, 0.84);
@@ -733,6 +745,7 @@ th {
   color: var(--ink);
 }
 
+/* ─── Tablet (≤ 1220px) ─────────────────────────────────────── */
 @media (max-width: 1220px) {
   .hero {
     flex-direction: column;
@@ -748,7 +761,7 @@ th {
   }
 
   .layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pipeline-kpis {
@@ -756,7 +769,7 @@ th {
   }
 
   .analysis-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .analysis-card:nth-child(2),
@@ -765,17 +778,55 @@ th {
   }
 }
 
+/* ─── Mobile (≤ 680px) ──────────────────────────────────────── */
 @media (max-width: 680px) {
+  /* Shell */
   .page-shell {
     padding: 14px;
   }
 
+  /* ── Decorative blobs: scale down so they don't overflow ── */
+  .ambient-a {
+    width: 160px;
+    height: 160px;
+    top: -40px;
+    right: -30px;
+  }
+
+  .ambient-b {
+    width: 220px;
+    height: 220px;
+    bottom: -80px;
+    left: -60px;
+  }
+
+  /* ── Hero & input ── */
   .input-group {
     grid-template-columns: 1fr;
   }
 
-  .kpi-grid {
-    grid-template-columns: 1fr;
+  .refresh-btn,
+  .ghost-btn {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  /* ── Navigation ── */
+  .view-switcher {
+    width: 100%;
+  }
+
+  .view-btn {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 0.75rem;
+    text-align: center;
+    white-space: normal;
+  }
+
+  /* ── Pipeline panel ── */
+  .pipeline-panel {
+    padding: 12px;
   }
 
   .pipeline-head {
@@ -784,20 +835,73 @@ th {
   }
 
   .pipeline-kpis {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .view-switcher {
-    width: 100%;
+  /* ── KPI grid: 2 cols so cards don't stack 4-deep ── */
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .view-btn {
-    flex: 1;
-    padding: 10px 12px;
+  .kpi-card strong {
+    font-size: 1.2rem;
   }
 
+  /* ── Panel headers: wrap when h2 + chip are tight ── */
+  .panel-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  /* ── Tables: remove forced min-width; hide least-critical columns ── */
+  table {
+    min-width: 0;
+  }
+
+  .pipeline-runs table {
+    min-width: 0;
+  }
+
+  /* Pipeline runs → keep State (2) + Result (3) only */
+  .pipeline-runs th:nth-child(1),
+  .pipeline-runs td:nth-child(1),
+  .pipeline-runs th:nth-child(4),
+  .pipeline-runs td:nth-child(4),
+  .pipeline-runs th:nth-child(5),
+  .pipeline-runs td:nth-child(5) {
+    display: none;
+  }
+
+  /* Forecast history → keep Date (1) + Horizon (2) + Pred Close (3) */
+  .forecast-table th:nth-child(4),
+  .forecast-table td:nth-child(4),
+  .forecast-table th:nth-child(5),
+  .forecast-table td:nth-child(5) {
+    display: none;
+  }
+
+  /* Training metrics → keep Model (1) + CV MAE (2) */
+  .metrics-table th:nth-child(3),
+  .metrics-table td:nth-child(3),
+  .metrics-table th:nth-child(4),
+  .metrics-table td:nth-child(4),
+  .metrics-table th:nth-child(5),
+  .metrics-table td:nth-child(5) {
+    display: none;
+  }
+
+  /* ── Horizon cards ── */
+  .horizon-price {
+    font-size: 1rem;
+  }
+
+  /* ── Analysis section ── */
   .analysis-window {
-    padding: 14px;
+    padding: 12px;
   }
 
   .analysis-header {
@@ -810,6 +914,7 @@ th {
   }
 
   .analysis-badge {
+    min-width: 0;
     width: 100%;
     text-align: left;
   }
@@ -822,13 +927,52 @@ th {
     min-height: calc(100vh - 20px);
   }
 
-  .condition-list {
-    grid-template-columns: 1fr;
+  .analysis-score strong {
+    font-size: 1.8rem;
   }
 
   .analysis-card:nth-child(3),
   .analysis-card:nth-child(4),
   .analysis-card:nth-child(5) {
     min-height: auto;
+  }
+
+  .condition-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* ── Charts ── */
+  .chart-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ─── Small phones (≤ 400px) ────────────────────────────────── */
+@media (max-width: 400px) {
+  .page-shell {
+    padding: 10px;
+  }
+
+  .kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kpi-card strong {
+    font-size: 1.1rem;
+  }
+
+  .pipeline-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  th,
+  td {
+    font-size: 0.8rem;
+    padding: 8px 6px;
+  }
+
+  .chip {
+    font-size: 0.72rem;
+    padding: 3px 8px;
   }
 }

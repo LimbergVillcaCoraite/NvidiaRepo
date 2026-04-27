@@ -16,6 +16,13 @@ function asDate(value) {
   return dt.toLocaleString();
 }
 
+function asDateShort(value) {
+  if (!value) return "-";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+  return dt.toLocaleDateString();
+}
+
 function getTrendTone(current, previous) {
   const curr = Number(current);
   const prev = Number(previous);
@@ -503,7 +510,7 @@ export default function App() {
                 <span className="chip">{history.length} rows</span>
               </div>
 
-              <div className="table-wrap">
+              <div className="table-wrap forecast-table">
                 <table>
                   <thead>
                     <tr>
@@ -517,7 +524,7 @@ export default function App() {
                   <tbody>
                     {history.map((row, idx) => (
                       <tr key={`${row.forecast_ts}-${row.horizon_day}-${idx}`}>
-                        <td>{asDate(row.forecast_date)}</td>
+                        <td>{asDateShort(row.forecast_date)}</td>
                         <td>{row.horizon_day || "-"}</td>
                         <td>{asNumber(row.pred_close)}</td>
                         <td>{asNumber(row.pred_low_80)}</td>
@@ -533,7 +540,7 @@ export default function App() {
                 <span className="chip">{metrics.length} rows</span>
               </div>
 
-              <div className="table-wrap">
+              <div className="table-wrap metrics-table">
                 <table>
                   <thead>
                     <tr>

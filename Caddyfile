@@ -1,0 +1,8 @@
+statusnvidia.duckdns.org {
+    encode zstd gzip
+    reverse_proxy frontend:80
+}
+
+http://statusnvidia.duckdns.org {
+    redir https://statusnvidia.duckdns.org{uri} permanent
+}

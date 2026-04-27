@@ -1,17 +1,32 @@
 services:
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: nvidiarepo-caddy
+    depends_on:
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: nvidiarepo-backend
     environment:
-      FRONTEND_ORIGIN: http://localhost:8080
       DATABRICKS_PROFILE: ${DATABRICKS_PROFILE:-}
       DATABRICKS_HOST: ${DATABRICKS_HOST:-}
       DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
       DATABRICKS_WAREHOUSE_ID: ${DATABRICKS_WAREHOUSE_ID:-c1790544d31644c6}
+      ALLOWED_HOSTS: localhost,127.0.0.1,statusnvidia.duckdns.org
+      FRONTEND_ORIGINS: https://statusnvidia.duckdns.org,http://localhost:5173,http://127.0.0.1:5173
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped
 
   frontend:
@@ -24,5 +39,9 @@ services:
     depends_on:
       - backend
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
