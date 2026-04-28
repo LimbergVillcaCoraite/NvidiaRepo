@@ -23,11 +23,16 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy to server
+      - name: Deploy to server (remote script)
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
         run: |
           ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
-            "cd ${REMOTE_REPO_PATH} && git fetch origin && git checkout main && git pull origin main && docker compose up -d --build --force-recreate"
+            "bash ${REMOTE_REPO_PATH}/scripts/deploy.sh ${REMOTE_REPO_PATH} main"
+
+      - name: Run smoke tests (public)
+        run: |
+          echo "Checking public health endpoint..."
+          curl -fS https://statusnvidia.duckdns.org/api/health | jq .
