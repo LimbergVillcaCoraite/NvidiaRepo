@@ -18,11 +18,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: nvidiarepo-backend
+    env_file:
+      - .env
     environment:
-      DATABRICKS_PROFILE: ${DATABRICKS_PROFILE:-}
-      DATABRICKS_HOST: ${DATABRICKS_HOST:-}
-      DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
-      DATABRICKS_WAREHOUSE_ID: ${DATABRICKS_WAREHOUSE_ID:-c1790544d31644c6}
       ALLOWED_HOSTS: localhost,127.0.0.1,statusnvidia.duckdns.org
       FRONTEND_ORIGINS: https://statusnvidia.duckdns.org,http://localhost:5173,http://127.0.0.1:5173
     ports:

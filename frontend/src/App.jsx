@@ -1,7 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 const PIPELINE_JOB_QUERY = "NVDA medallion";
+const QUICK_SYMBOLS = ["NVDA", "MSFT", "AAPL", "AMD", "TSLA"];
+const FAVORITES_STORAGE_KEY = "nvidiarepo.favorite.symbols";
+const COMPARISON_WEIGHTS_STORAGE_KEY = "nvidiarepo.comparison.weights";
+const CHART_RANGE_OPTIONS = [
+  { value: "7", label: "7d" },
+  { value: "30", label: "30d" },
+  { value: "60", label: "60d" },
+];
+const COMPARISON_SORT_OPTIONS = [
+  { value: "signal", label: "Signal first" },
+  { value: "risk", label: "Lower risk" },
+  { value: "price_desc", label: "Higher price" },
+  { value: "symbol", label: "Symbol A-Z" },
+];
 
 function asNumber(value, digits = 2) {
   const num = Number(value);
@@ -140,9 +154,42 @@ function SvgBarChart({ data, width = 880, height = 240, label, valueFormatter = 
 }
 
 export default function App() {
+  const symbolInputRef = useRef(null);
   const [symbolInput, setSymbolInput] = useState("NVDA");
   const [symbol, setSymbol] = useState("NVDA");
   const [activeView, setActiveView] = useState("dashboard");
+  const [compactMode, setCompactMode] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [chartRange, setChartRange] = useState("30");
+  const [comparisonSort, setComparisonSort] = useState("signal");
+  const [comparisonWeights, setComparisonWeights] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(COMPARISON_WEIGHTS_STORAGE_KEY);
+      if (!raw) return { delta: 1.0, risk: 0.25, mae: 0.4 };
+      const parsed = JSON.parse(raw);
+      const delta = clamp(Number(parsed?.delta), 0, 2) || 1.0;
+      const risk = clamp(Number(parsed?.risk), 0, 2) || 0.25;
+      const mae = clamp(Number(parsed?.mae), 0, 2) || 0.4;
+      return { delta, risk, mae };
+    } catch {
+      return { delta: 1.0, risk: 0.25, mae: 0.4 };
+    }
+  });
+  const [favoriteSymbols, setFavoriteSymbols] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+      if (!raw) return ["NVDA"];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return ["NVDA"];
+      const cleaned = parsed
+        .map((item) => String(item || "").toUpperCase().replace(/[^A-Z0-9._-]/g, "").slice(0, 10))
+        .filter(Boolean)
+        .slice(0, 12);
+      return cleaned.length ? cleaned : ["NVDA"];
+    } catch {
+      return ["NVDA"];
+    }
+  });
   const [latest, setLatest] = useState(null);
   const [history, setHistory] = useState([]);
   const [metrics, setMetrics] = useState([]);
@@ -151,6 +198,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [jobError, setJobError] = useState("");
+  const [bronzeStatus, setBronzeStatus] = useState(null);
+  const [comparisonRows, setComparisonRows] = useState([]);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
 
   const avgForecast = useMemo(() => {
@@ -180,13 +231,146 @@ export default function App() {
 
   const latestClose = useMemo(() => Number(history[0]?.pred_close || latest?.predicted_close || 0), [history, latest]);
 
+  const historyInRange = useMemo(() => {
+    const size = Number(chartRange);
+    if (!Number.isFinite(size) || size <= 0) return history;
+    return history.slice(0, size);
+  }, [chartRange, history]);
+
+  const comparisonSymbols = useMemo(() => {
+    const merged = [symbol, ...favoriteSymbols, ...QUICK_SYMBOLS];
+    const unique = [];
+    for (const item of merged) {
+      if (!item || unique.includes(item)) continue;
+      unique.push(item);
+      if (unique.length >= 4) break;
+    }
+    return unique;
+  }, [symbol, favoriteSymbols]);
+
+  const freshnessText = useMemo(() => {
+    if (!lastUpdated) return "No updates yet";
+    const elapsedMs = Date.now() - lastUpdated.getTime();
+    const elapsedMinutes = Math.floor(elapsedMs / 60000);
+    if (elapsedMinutes <= 0) return "Updated just now";
+    if (elapsedMinutes === 1) return "Updated 1 minute ago";
+    if (elapsedMinutes < 60) return `Updated ${elapsedMinutes} minutes ago`;
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    if (elapsedHours === 1) return "Updated 1 hour ago";
+    return `Updated ${elapsedHours} hours ago`;
+  }, [lastUpdated]);
+
+  const connectionState = useMemo(() => {
+    if (error) return { tone: "degraded", label: "Degraded" };
+    if (loading) return { tone: "syncing", label: "Syncing" };
+    return { tone: "live", label: "Live" };
+  }, [error, loading]);
+
+  const analysis = useMemo(() => {
+    const close = Number(latest?.predicted_close || history[0]?.pred_close || 0);
+    const low = Number(latest?.predicted_low_80 || 0);
+    const high = Number(latest?.predicted_high_80 || 0);
+    const range = high - low;
+    const rangePct = close ? (range / close) * 100 : null;
+    const cvMae = Number(metrics[0]?.best_cv_mae || 0);
+    const predStd = Number(metrics[0]?.pred_std || 0);
+
+    const conditions = {
+      trendUp: trendTone === "up",
+      tightRange: Number.isFinite(rangePct) && rangePct < 1.2,
+      lowError: Number.isFinite(cvMae) && cvMae < 1,
+      healthyVolatility: Number.isFinite(predStd) && predStd < 5,
+    };
+
+    const score = [conditions.trendUp, conditions.tightRange, conditions.lowError, conditions.healthyVolatility].filter(Boolean).length;
+    const decision = score >= 3 ? "BUY" : score === 2 ? "HOLD" : "AVOID";
+    const confidence = clamp(48 + score * 12, 40, 92);
+
+    return { close, low, high, range, rangePct, cvMae, predStd, conditions, score, decision, confidence };
+  }, [history, latest, metrics, trendTone]);
+
+  const uiAlerts = useMemo(() => {
+    const alerts = [];
+    const rangePct = Number(analysis.rangePct);
+    const cvMae = Number(analysis.cvMae);
+
+    if (!loading && trendTone === "down") {
+      alerts.push({
+        tone: "warn",
+        title: "Short-term trend turned bearish",
+        description: "Recent forecast points are moving down. Consider waiting for trend stabilization.",
+      });
+    }
+
+    if (!loading && Number.isFinite(rangePct) && rangePct > 1.8) {
+      alerts.push({
+        tone: "warn",
+        title: "Forecast uncertainty increased",
+        description: `80% band width is ${formatPercent(rangePct, 1)}, which indicates wider variance than usual.`,
+      });
+    }
+
+    if (!loading && Number.isFinite(cvMae) && cvMae > 1.0) {
+      alerts.push({
+        tone: "danger",
+        title: "Model error is elevated",
+        description: `Cross-validation MAE is ${asNumber(cvMae, 4)}. Review the selected model and recent pipeline runs.`,
+      });
+    }
+
+    if (!loading && latestRunState.includes("FAILED")) {
+      alerts.push({
+        tone: "danger",
+        title: "Latest pipeline run failed",
+        description: "Databricks job did not complete successfully. Forecast freshness may be impacted.",
+      });
+    }
+
+    return alerts.slice(0, 3);
+  }, [analysis, latestRunState, loading, trendTone]);
+
+  const sortedComparisonRows = useMemo(() => {
+    const currentClose = Number(latest?.predicted_close);
+
+    function riskIndexForRow(row) {
+      const close = Number(row?.predicted_close);
+      const low = Number(row?.predicted_low_80);
+      const high = Number(row?.predicted_high_80);
+      const cvMae = Number(row?.cv_mae);
+      const bandPct = Number.isFinite(close) && close ? ((high - low) / close) * 100 : 0;
+      const maeScore = Number.isFinite(cvMae) ? cvMae * 12 : 0;
+      return Math.max(0, bandPct + maeScore);
+    }
+
+    const enriched = comparisonRows.map((item) => {
+      const close = Number(item.row?.predicted_close);
+      const cvMae = Number(item.row?.cv_mae);
+      const delta = Number.isFinite(currentClose) && Number.isFinite(close) ? close - currentClose : 0;
+      const deltaPct = Number.isFinite(currentClose) && currentClose ? (delta / currentClose) * 100 : 0;
+      const riskIndex = riskIndexForRow(item.row);
+      const maePenalty = Number.isFinite(cvMae) ? cvMae * 10 : 0;
+      const signalScore =
+        deltaPct * comparisonWeights.delta -
+        riskIndex * comparisonWeights.risk -
+        maePenalty * comparisonWeights.mae;
+      return { ...item, close, delta, deltaPct, riskIndex, cvMae, signalScore };
+    });
+
+    return enriched.sort((a, b) => {
+      if (comparisonSort === "risk") return a.riskIndex - b.riskIndex;
+      if (comparisonSort === "price_desc") return b.close - a.close;
+      if (comparisonSort === "symbol") return a.symbol.localeCompare(b.symbol);
+      return b.signalScore - a.signalScore;
+    });
+  }, [comparisonRows, comparisonSort, comparisonWeights, latest]);
+
   const chartData = useMemo(() => {
-    const forecastSeries = history.slice().reverse().map((row, index) => ({
+    const forecastSeries = historyInRange.slice().reverse().map((row, index) => ({
       label: `D${index + 1}`,
       value: Number(row.pred_close || 0),
     }));
 
-    const rangeSeries = history.slice(0, 8).map((row) => ({
+    const rangeSeries = historyInRange.slice(0, 8).map((row) => ({
       label: `D${row.horizon_day || "-"}`,
       value: Math.max(Number(row.pred_high_80 || 0) - Number(row.pred_low_80 || 0), 0),
     }));
@@ -197,7 +381,7 @@ export default function App() {
     }));
 
     return { forecastSeries, rangeSeries, metricSeries };
-  }, [history, metrics]);
+  }, [historyInRange, metrics]);
 
   const chartInsights = useMemo(() => {
     const forecastValues = chartData.forecastSeries.map((item) => Number(item.value)).filter((value) => Number.isFinite(value));
@@ -232,29 +416,6 @@ export default function App() {
     };
   }, [chartData]);
 
-  const analysis = useMemo(() => {
-    const close = Number(latest?.predicted_close || history[0]?.pred_close || 0);
-    const low = Number(latest?.predicted_low_80 || 0);
-    const high = Number(latest?.predicted_high_80 || 0);
-    const range = high - low;
-    const rangePct = close ? (range / close) * 100 : null;
-    const cvMae = Number(metrics[0]?.best_cv_mae || 0);
-    const predStd = Number(metrics[0]?.pred_std || 0);
-
-    const conditions = {
-      trendUp: trendTone === "up",
-      tightRange: Number.isFinite(rangePct) && rangePct < 1.2,
-      lowError: Number.isFinite(cvMae) && cvMae < 1,
-      healthyVolatility: Number.isFinite(predStd) && predStd < 5,
-    };
-
-    const score = [conditions.trendUp, conditions.tightRange, conditions.lowError, conditions.healthyVolatility].filter(Boolean).length;
-    const decision = score >= 3 ? "BUY" : score === 2 ? "HOLD" : "AVOID";
-    const confidence = clamp(48 + score * 12, 40, 92);
-
-    return { close, low, high, range, rangePct, cvMae, predStd, conditions, score, decision, confidence };
-  }, [history, latest, metrics, trendTone]);
-
   async function fetchForecastData(targetSymbol) {
     setLoading(true);
     setError("");
@@ -279,6 +440,16 @@ export default function App() {
       setLatest(latestData.row || null);
       setHistory(historyData.rows || []);
       setMetrics(metricsData.rows || []);
+
+      try {
+        const bronzeRes = await fetch(`${API_BASE}/databricks/bronze/status?symbol=${encoded}`);
+        if (bronzeRes.ok) {
+          const bronzeData = await bronzeRes.json();
+          setBronzeStatus(bronzeData.row || null);
+        }
+      } catch {
+        // non-critical
+      }
 
       try {
         const searchRes = await fetch(
@@ -320,6 +491,104 @@ export default function App() {
     fetchForecastData(symbol);
   }, [symbol]);
 
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const intervalId = setInterval(() => {
+      fetchForecastData(symbol);
+    }, 60000);
+    return () => clearInterval(intervalId);
+  }, [autoRefresh, symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchComparisonRows() {
+      setComparisonLoading(true);
+      setComparisonError("");
+
+      try {
+        const rows = await Promise.all(
+          comparisonSymbols.map(async (ticker) => {
+            const response = await fetch(`${API_BASE}/databricks/forecast/latest?symbol=${encodeURIComponent(ticker)}`);
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            const data = await response.json();
+            return {
+              symbol: ticker,
+              row: data.row || null,
+            };
+          }),
+        );
+
+        if (!cancelled) {
+          setComparisonRows(rows);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setComparisonRows([]);
+          setComparisonError(`Could not load comparison data: ${err.message}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setComparisonLoading(false);
+        }
+      }
+    }
+
+    if (comparisonSymbols.length) {
+      fetchComparisonRows();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [comparisonSymbols, lastUpdated]);
+
+  useEffect(() => {
+    window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteSymbols));
+  }, [favoriteSymbols]);
+
+  useEffect(() => {
+    window.localStorage.setItem(COMPARISON_WEIGHTS_STORAGE_KEY, JSON.stringify(comparisonWeights));
+  }, [comparisonWeights]);
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const activeElement = document.activeElement;
+      const tag = activeElement?.tagName;
+      const isEditable = tag === "INPUT" || tag === "TEXTAREA" || activeElement?.isContentEditable;
+
+      if (event.key === "/") {
+        event.preventDefault();
+        symbolInputRef.current?.focus();
+        symbolInputRef.current?.select();
+        return;
+      }
+
+      if (isEditable) return;
+
+      if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        fetchForecastData(symbol);
+      } else if (event.key === "1") {
+        event.preventDefault();
+        setActiveView("dashboard");
+      } else if (event.key === "2") {
+        event.preventDefault();
+        setActiveView("analysis");
+      } else if (event.key === "c" || event.key === "C") {
+        event.preventDefault();
+        setCompactMode((prev) => !prev);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [symbol]);
+
   function submitSymbol(event) {
     event.preventDefault();
     const cleaned = symbolInput.toUpperCase().replace(/[^A-Z0-9._-]/g, "").slice(0, 10);
@@ -328,8 +597,31 @@ export default function App() {
     setSymbol(cleaned);
   }
 
+  function setQuickSymbol(nextSymbol) {
+    setSymbolInput(nextSymbol);
+    setSymbol(nextSymbol);
+  }
+
+  function toggleFavoriteSymbol(targetSymbol) {
+    setFavoriteSymbols((prev) => {
+      const alreadyFavorite = prev.includes(targetSymbol);
+      if (alreadyFavorite) {
+        const next = prev.filter((item) => item !== targetSymbol);
+        return next.length ? next : ["NVDA"];
+      }
+      return [targetSymbol, ...prev].slice(0, 12);
+    });
+  }
+
+  function setComparisonWeight(key, nextValue) {
+    setComparisonWeights((prev) => ({
+      ...prev,
+      [key]: clamp(Number(nextValue), 0, 2),
+    }));
+  }
+
   return (
-    <div className="page-shell">
+    <div className={compactMode ? "page-shell compact-mode" : "page-shell"}>
       <div className="ambient ambient-a" />
       <div className="ambient ambient-b" />
 
@@ -341,10 +633,16 @@ export default function App() {
         </div>
 
         <form className="hero-actions" onSubmit={submitSymbol}>
+          <div className="status-row">
+            <span className={`status-pill ${connectionState.tone}`}>{connectionState.label}</span>
+            <span className="data-freshness">{freshnessText}</span>
+          </div>
+
           <label htmlFor="symbol-input" className="input-label">Symbol</label>
           <div className="input-group">
             <input
               id="symbol-input"
+              ref={symbolInputRef}
               className="symbol-input"
               value={symbolInput}
               onChange={(event) => setSymbolInput(event.target.value.toUpperCase())}
@@ -363,7 +661,66 @@ export default function App() {
               {loading ? "Refreshing" : "Refresh"}
             </button>
           </div>
-          <p className="last-update">Last updated: {lastUpdated ? asDate(lastUpdated.toISOString()) : "-"}</p>
+
+          <div className="symbol-presets" aria-label="Quick symbols">
+            {QUICK_SYMBOLS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={symbol === preset ? "preset-btn active" : "preset-btn"}
+                onClick={() => setQuickSymbol(preset)}
+                disabled={loading && symbol === preset}
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+
+          <div className="favorites-row" aria-label="Favorite symbols">
+            <button
+              type="button"
+              className={favoriteSymbols.includes(symbol) ? "favorite-toggle active" : "favorite-toggle"}
+              onClick={() => toggleFavoriteSymbol(symbol)}
+              disabled={!symbol}
+            >
+              {favoriteSymbols.includes(symbol) ? "★ Remove favorite" : "☆ Add favorite"}
+            </button>
+
+            <div className="favorites-list">
+              {favoriteSymbols.map((fav) => (
+                <button
+                  key={fav}
+                  type="button"
+                  className={symbol === fav ? "favorite-chip active" : "favorite-chip"}
+                  onClick={() => setQuickSymbol(fav)}
+                >
+                  {fav}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="control-row">
+            <label className="auto-refresh-toggle">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(event) => setAutoRefresh(event.target.checked)}
+              />
+              Auto refresh every 60s
+            </label>
+            <label className="auto-refresh-toggle">
+              <input
+                type="checkbox"
+                checked={compactMode}
+                onChange={(event) => setCompactMode(event.target.checked)}
+              />
+              Compact mode
+            </label>
+            <p className="last-update">Last updated: {lastUpdated ? asDate(lastUpdated.toISOString()) : "-"}</p>
+          </div>
+
+          <p className="shortcut-hint">Shortcuts: / symbol, R refresh, 1 dashboard, 2 analysis, C compact</p>
         </form>
       </header>
 
@@ -386,6 +743,106 @@ export default function App() {
 
       {error ? <div className="error-banner">{error}</div> : null}
       {jobError ? <div className="error-banner">{jobError}</div> : null}
+      {!error && uiAlerts.length ? (
+        <section className="alerts-strip" aria-live="polite">
+          {uiAlerts.map((alert, idx) => (
+            <article key={`${alert.title}-${idx}`} className={`alert-card ${alert.tone}`}>
+              <h3>{alert.title}</h3>
+              <p>{alert.description}</p>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <section className="comparison-panel" aria-live="polite">
+        <div className="panel-head">
+          <h2>Multi-symbol snapshot</h2>
+          <div className="panel-controls">
+            <label className="mini-control">
+              Sort
+              <select value={comparisonSort} onChange={(event) => setComparisonSort(event.target.value)}>
+                {COMPARISON_SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <span className="chip">{comparisonSymbols.length} tracked</span>
+          </div>
+        </div>
+
+        {comparisonError ? <p className="comparison-error">{comparisonError}</p> : null}
+
+        <div className="comparison-grid">
+          {comparisonLoading
+            ? Array.from({ length: 4 }).map((_, idx) => (
+                <article key={`compare-skeleton-${idx}`} className="comparison-card skeleton-card">
+                  <span className="skeleton-box skeleton-title" />
+                  <strong className="skeleton-box skeleton-value" />
+                  <small className="skeleton-box skeleton-meta" />
+                </article>
+              ))
+            : sortedComparisonRows.map((item) => {
+                const close = Number(item.row?.predicted_close);
+                const hasClose = Number.isFinite(close);
+                const currentClose = Number(latest?.predicted_close);
+                const delta = Number.isFinite(currentClose) && hasClose ? close - currentClose : null;
+                const deltaTone = delta === null ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+
+                return (
+                  <article key={item.symbol} className={`comparison-card tone-${deltaTone}`}>
+                    <div className="comparison-top">
+                      <strong>{item.symbol}</strong>
+                      <span>{item.row?.model_name || "-"}</span>
+                    </div>
+                    <div className="comparison-price">{hasClose ? asNumber(close) : "-"}</div>
+                    <small>
+                      vs {symbol}: {delta === null ? "-" : `${delta > 0 ? "+" : ""}${asNumber(delta, 2)}`}
+                    </small>
+                    <small>Risk index: {asNumber(item.riskIndex, 2)}</small>
+                  </article>
+                );
+              })}
+        </div>
+
+        <div className="weights-panel">
+          <p>Ranking Weights</p>
+          <div className="weights-grid">
+            <label>
+              Delta {asNumber(comparisonWeights.delta, 2)}
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.05"
+                value={comparisonWeights.delta}
+                onChange={(event) => setComparisonWeight("delta", event.target.value)}
+              />
+            </label>
+            <label>
+              Risk {asNumber(comparisonWeights.risk, 2)}
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.05"
+                value={comparisonWeights.risk}
+                onChange={(event) => setComparisonWeight("risk", event.target.value)}
+              />
+            </label>
+            <label>
+              MAE {asNumber(comparisonWeights.mae, 2)}
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.05"
+                value={comparisonWeights.mae}
+                onChange={(event) => setComparisonWeight("mae", event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
 
       {activeView === "dashboard" ? (
         <>
@@ -415,6 +872,14 @@ export default function App() {
                 <span>Trigger</span>
                 <strong>{latestRun?.trigger || "-"}</strong>
               </article>
+              <article>
+                <span>Bronze last price</span>
+                <strong>{bronzeStatus?.last_price_date ? asDateShort(bronzeStatus.last_price_date) : "-"}</strong>
+              </article>
+              <article>
+                <span>Bronze trading days</span>
+                <strong>{bronzeStatus?.unique_trading_days ?? "-"}</strong>
+              </article>
             </div>
 
             <div className="table-wrap pipeline-runs">
@@ -429,6 +894,27 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
+                  {loading
+                    ? Array.from({ length: 3 }).map((_, idx) => (
+                        <tr key={`pipeline-skeleton-${idx}`} className="skeleton-row">
+                          <td>
+                            <span className="skeleton-box" />
+                          </td>
+                          <td>
+                            <span className="skeleton-box" />
+                          </td>
+                          <td>
+                            <span className="skeleton-box" />
+                          </td>
+                          <td>
+                            <span className="skeleton-box" />
+                          </td>
+                          <td>
+                            <span className="skeleton-box" />
+                          </td>
+                        </tr>
+                      ))
+                    : null}
                   {pipelineRuns.map((run) => (
                     <tr key={run.run_id}>
                       <td>{run.run_id || "-"}</td>
@@ -451,6 +937,16 @@ export default function App() {
           </section>
 
           <section className="kpi-grid">
+            {loading ? (
+              Array.from({ length: 4 }).map((_, idx) => (
+                <article key={`kpi-skeleton-${idx}`} className="kpi-card skeleton-card">
+                  <span className="skeleton-box skeleton-title" />
+                  <strong className="skeleton-box skeleton-value" />
+                  <small className="skeleton-box skeleton-meta" />
+                </article>
+              ))
+            ) : (
+              <>
             <article className="kpi-card kpi-highlight">
               <span>Predicted close</span>
               <strong>{asNumber(latest?.predicted_close)}</strong>
@@ -460,7 +956,7 @@ export default function App() {
             <article className="kpi-card">
               <span>80% confidence band</span>
               <strong>{asNumber(latest?.predicted_low_80)} to {asNumber(latest?.predicted_high_80)}</strong>
-              <small>Model: {latest?.model_name || "-"}</small>
+              <small>Model: {latest?.model_name || "-"} · <span className="adj-badge" title="Features trained on split-adjusted adj_close — NVDA 10:1 split corrected">adj. features</span></small>
             </article>
 
             <article className="kpi-card">
@@ -474,8 +970,11 @@ export default function App() {
               <strong>{trendTone.toUpperCase()}</strong>
               <small>Based on the latest two forecast points</small>
             </article>
+              </>
+            )}
           </section>
 
+          <div className="workspace-layout">
           <main className="layout">
             <section className="panel left-panel">
               <div className="panel-head">
@@ -484,6 +983,21 @@ export default function App() {
               </div>
 
               <div className="horizon-list">
+                {loading
+                  ? Array.from({ length: 6 }).map((_, idx) => (
+                      <article key={`horizon-skeleton-${idx}`} className="horizon-card skeleton-card">
+                        <div className="horizon-top">
+                          <span className="skeleton-box skeleton-title" />
+                          <span className="skeleton-box skeleton-title" />
+                        </div>
+                        <div className="horizon-price skeleton-box skeleton-value" />
+                        <div className="range-track">
+                          <span style={{ width: "65%" }} />
+                        </div>
+                        <p className="horizon-range skeleton-box skeleton-meta" />
+                      </article>
+                    ))
+                  : null}
                 {history.slice(0, 8).map((row, idx) => (
                   <article key={`${row.forecast_ts}-${row.horizon_day}-${idx}`} className="horizon-card">
                     <div className="horizon-top">
@@ -519,9 +1033,22 @@ export default function App() {
                       <th>Pred Close</th>
                       <th>Low 80</th>
                       <th>High 80</th>
+                      <th>Model</th>
                     </tr>
                   </thead>
                   <tbody>
+                    {loading
+                      ? Array.from({ length: 6 }).map((_, idx) => (
+                          <tr key={`history-skeleton-${idx}`} className="skeleton-row">
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                          </tr>
+                        ))
+                      : null}
                     {history.map((row, idx) => (
                       <tr key={`${row.forecast_ts}-${row.horizon_day}-${idx}`}>
                         <td>{asDateShort(row.forecast_date)}</td>
@@ -529,6 +1056,7 @@ export default function App() {
                         <td>{asNumber(row.pred_close)}</td>
                         <td>{asNumber(row.pred_low_80)}</td>
                         <td>{asNumber(row.pred_high_80)}</td>
+                        <td>{row.model_name || "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -549,9 +1077,22 @@ export default function App() {
                       <th>Pred Std</th>
                       <th>Train Rows</th>
                       <th>Loaded</th>
+                      <th>Run ID</th>
                     </tr>
                   </thead>
                   <tbody>
+                    {loading
+                      ? Array.from({ length: 4 }).map((_, idx) => (
+                          <tr key={`metrics-skeleton-${idx}`} className="skeleton-row">
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                            <td><span className="skeleton-box" /></td>
+                          </tr>
+                        ))
+                      : null}
                     {metrics.map((row, idx) => (
                       <tr key={`${row.loaded_ts}-${idx}`}>
                         <td>{row.selected_model || "-"}</td>
@@ -559,6 +1100,7 @@ export default function App() {
                         <td>{asNumber(row.pred_std, 6)}</td>
                         <td>{row.train_rows || "-"}</td>
                         <td>{asDate(row.loaded_ts)}</td>
+                        <td className="run-id-cell" title={row.pipeline_run_id || ""}>{row.pipeline_run_id ? String(row.pipeline_run_id).slice(-10) : "-"}</td>
                       </tr>
                     ))}
                     {!loading && metrics.length === 0 ? (
@@ -573,6 +1115,42 @@ export default function App() {
               </div>
             </section>
           </main>
+
+          <aside className="ops-panel">
+            <div className="panel-head">
+              <h2>Ops Side Panel</h2>
+              <span className={`chip chip-${connectionState.tone}`}>{connectionState.label}</span>
+            </div>
+
+            <div className="ops-kpis">
+              <article>
+                <span>Active symbol</span>
+                <strong>{symbol}</strong>
+              </article>
+              <article>
+                <span>Pipeline state</span>
+                <strong>{latestRunState}</strong>
+              </article>
+              <article>
+                <span>Decision</span>
+                <strong>{analysis.decision}</strong>
+              </article>
+              <article>
+                <span>Confidence</span>
+                <strong>{analysis.confidence}%</strong>
+              </article>
+            </div>
+
+            <ul className="ops-list">
+              <li>Backend health: {error ? "Degraded" : "Healthy"}</li>
+              <li>Forecast rows loaded: {history.length}</li>
+              <li>Metric rows loaded: {metrics.length}</li>
+              <li>Comparison symbols: {comparisonSymbols.length}</li>
+              <li>Auto refresh: {autoRefresh ? "Enabled" : "Disabled"}</li>
+              <li>Last update: {lastUpdated ? asDate(lastUpdated.toISOString()) : "-"}</li>
+            </ul>
+          </aside>
+          </div>
         </>
       ) : null}
 
@@ -587,11 +1165,21 @@ export default function App() {
                 a simple buy / wait / avoid signal.
               </p>
             </div>
-            <div className="analysis-badge">
-              <span>Decision signal</span>
-              <strong className={`decision decision-${analysis.decision.toLowerCase().replace(/\s+/g, "-")}`}>
-                {analysis.decision}
-              </strong>
+            <div className="analysis-side">
+              <div className="analysis-badge">
+                <span>Decision signal</span>
+                <strong className={`decision decision-${analysis.decision.toLowerCase().replace(/\s+/g, "-")}`}>
+                  {analysis.decision}
+                </strong>
+              </div>
+              <label className="mini-control">
+                Horizon range
+                <select value={chartRange} onChange={(event) => setChartRange(event.target.value)}>
+                  {CHART_RANGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
 
@@ -610,6 +1198,7 @@ export default function App() {
                 <li>Band width: {asNumber(analysis.range)}</li>
                 <li>CV MAE: {asNumber(analysis.cvMae, 4)}</li>
                 <li>Prediction std dev: {asNumber(analysis.predStd, 4)}</li>
+                <li className="adj-feature-note" title="Lag, returns and rolling stats computed on adj_close to correct the June 2024 NVDA 10:1 stock split">Features: split-adjusted adj_close</li>
               </ul>
               <p className="analysis-note">
                 This is a visual decision aid, not financial advice.
@@ -619,7 +1208,7 @@ export default function App() {
             <article className="analysis-card">
               <div className="panel-head">
                 <h3>Forecast trajectory</h3>
-                <span className="chip">{history.length} points</span>
+                <span className="chip">{historyInRange.length} points</span>
               </div>
               <p className="chart-caption">
                 X axis: future trading days in the forecast horizon. Y axis: predicted close price in USD.
@@ -646,7 +1235,7 @@ export default function App() {
                 data={chartData.forecastSeries}
                 stroke="#0f867e"
                 fill="rgba(15,134,126,0.12)"
-                xAxisLabel="Future trading days"
+                xAxisLabel={`Future trading days (${chartRange}d window)`}
                 yAxisLabel="Predicted close price (USD)"
               />
             </article>
@@ -654,7 +1243,7 @@ export default function App() {
             <article className="analysis-card">
               <div className="panel-head">
                 <h3>Confidence band width</h3>
-                <span className="chip">Last 8 days</span>
+                <span className="chip">Last {Math.min(8, historyInRange.length || 8)} days</span>
               </div>
               <p className="chart-caption">The width of the 80% band per horizon point.</p>
               <div className="chart-insight">

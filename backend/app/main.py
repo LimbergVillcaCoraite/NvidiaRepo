@@ -159,6 +159,33 @@ def api_forecast_latest(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/api/databricks/bronze/status")
+def api_bronze_status(
+    symbol: str = Query(default="NVDA"),
+    profile: str = Query(default_factory=_default_profile),
+    warehouse_id: str = Query(default_factory=_default_warehouse_id),
+) -> dict[str, Any]:
+    normalized_symbol = _normalize_symbol(symbol)
+    sql = (
+        "SELECT source_symbol, MAX(date) AS last_price_date, "
+        "MAX(ingestion_ts) AS last_ingestion_ts, "
+        "COUNT(DISTINCT date) AS unique_trading_days "
+        "FROM workspace.bronze.yahoo_finance_prices_raw "
+        f"WHERE source_symbol = '{normalized_symbol}' "
+        "GROUP BY source_symbol LIMIT 1"
+    )
+    try:
+        rows = execute_sql_statement(sql, profile=profile, warehouse_id=warehouse_id)
+        return {
+            "symbol": normalized_symbol,
+            "profile": profile,
+            "warehouse_id": warehouse_id,
+            "row": rows[0] if rows else None,
+        }
+    except DatabricksCLIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @app.get("/api/databricks/forecast/history")
 def api_forecast_history(
     symbol: str = Query(default="NVDA"),
@@ -197,7 +224,7 @@ def api_forecast_metrics(
 ) -> dict[str, Any]:
     normalized_symbol = _normalize_symbol(symbol)
     sql = (
-        "SELECT symbol, selected_model, best_cv_mae, pred_std, train_rows, loaded_ts "
+        "SELECT symbol, selected_model, best_cv_mae, pred_std, train_rows, pipeline_run_id, loaded_ts "
         "FROM workspace.serving.nvda_forecast_metrics "
         f"WHERE symbol = '{normalized_symbol}' "
         "ORDER BY loaded_ts DESC "
