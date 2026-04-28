@@ -8,15 +8,33 @@ jobs:
   deploy:
     name: Deploy on push to main
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent and add key
-        uses: webfactory/ssh-agent@v0.8.1
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Validate required secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
+        run: |
+          test -n "${SSH_PRIVATE_KEY}" || { echo "Missing secret: SSH_PRIVATE_KEY"; exit 1; }
+          test -n "${SSH_HOST}" || { echo "Missing secret: SSH_HOST"; exit 1; }
+          test -n "${SSH_USER}" || { echo "Missing secret: SSH_USER"; exit 1; }
+          test -n "${REMOTE_REPO_PATH}" || { echo "Missing secret: REMOTE_REPO_PATH"; exit 1; }
+
+      - name: Configure SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
 
       - name: Add server to known_hosts
         run: |
@@ -56,7 +74,8 @@ jobs:
           echo "🧪 Running smoke tests..."
           for i in {1..10}; do
             echo "  Attempt $i/10..."
-            if curl -fS --connect-timeout 5 https://statusnvidia.duckdns.org/api/health | jq -e '.status == "ok"'; then
+            RESPONSE=$(curl -fsS --connect-timeout 5 https://statusnvidia.duckdns.org/api/health || true)
+            if echo "${RESPONSE}" | grep -q '"status":"ok"'; then
               echo "✓ Health check passed!"
               exit 0
             fi
