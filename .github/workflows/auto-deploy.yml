@@ -23,16 +23,65 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy to server (remote script)
+      - name: Save pre-deployment state
+        id: pre_deploy
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
         run: |
-          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
-            "bash ${REMOTE_REPO_PATH}/scripts/deploy.sh ${REMOTE_REPO_PATH} main"
+          CURRENT_COMMIT=$(ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+            "cd ${REMOTE_REPO_PATH} && git rev-parse HEAD" || echo "unknown")
+          echo "commit=${CURRENT_COMMIT}" >> $GITHUB_OUTPUT
+          echo "✓ Pre-deployment state saved: $CURRENT_COMMIT"
 
-      - name: Run smoke tests (public)
+      - name: Deploy to server (remote script)
+        id: deploy_step
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
         run: |
-          echo "Checking public health endpoint..."
-          curl -fS https://statusnvidia.duckdns.org/api/health | jq .
+          echo "🚀 Starting deployment to $SSH_HOST..."
+          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+            "bash ${REMOTE_REPO_PATH}/scripts/deploy.sh ${REMOTE_REPO_PATH} main" || {
+            echo "❌ Deploy script failed"
+            exit 1
+          }
+          echo "✓ Deployment script completed successfully"
+
+      - name: Run smoke tests (health check)
+        timeout-minutes: 2
+        run: |
+          echo "🧪 Running smoke tests..."
+          for i in {1..10}; do
+            echo "  Attempt $i/10..."
+            if curl -fS --connect-timeout 5 https://statusnvidia.duckdns.org/api/health | jq -e '.status == "ok"'; then
+              echo "✓ Health check passed!"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "❌ Health check failed after 10 attempts"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
+          PREVIOUS_COMMIT: ${{ steps.pre_deploy.outputs.commit }}
+        run: |
+          echo "🔄 Rollback initiated..."
+          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+            "cd ${REMOTE_REPO_PATH} && \
+            git reset --hard ${PREVIOUS_COMMIT} && \
+            docker compose down && \
+            docker compose up -d --build" || echo "⚠️ Rollback completed with warnings"
+          echo "✓ Rollback completed"
+
+      - name: Deployment status
+        run: |
+          echo "✅ Deployment successful"
+          echo "🌐 App available at: https://statusnvidia.duckdns.org"
