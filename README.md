@@ -2,6 +2,19 @@
 
 Production-oriented full-stack application for visualizing NVDA Medallion pipeline outputs from Databricks, with containerized deployment and CI/CD automation.
 
+![Python](https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115.6-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Caddy](https://img.shields.io/badge/Caddy-2.8-1F88C0?logo=caddy&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-1.27-009639?logo=nginx&logoColor=white)
+![Databricks](https://img.shields.io/badge/Databricks-Platform-FF3621?logo=databricks&logoColor=white)
+![Delta Lake](https://img.shields.io/badge/Delta-Lake-0A5A9C?logo=databricks&logoColor=white)
+![Apache Spark](https://img.shields.io/badge/Apache-Spark-E25A1C?logo=apachespark&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub-Actions-2088FF?logo=githubactions&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-2ea44f)
+
 ## Table of Contents
 
 1. Overview
@@ -51,6 +64,15 @@ High-level data flow:
 
 This section inventories all major technologies used across notebooks, jobs, pipelines, deployment, and application runtime.
 
+### Platform Badges
+
+![Databricks](https://img.shields.io/badge/Databricks-Workspace%20%26%20Jobs-FF3621?logo=databricks&logoColor=white)
+![Unity Catalog](https://img.shields.io/badge/Unity-Catalog-FF6F00)
+![Delta Lake](https://img.shields.io/badge/Delta-Lake-0A5A9C)
+![Spark](https://img.shields.io/badge/Apache-Spark-E25A1C?logo=apachespark&logoColor=white)
+![MLflow](https://img.shields.io/badge/MLflow-Tracking-0194E2?logo=mlflow&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub-Actions-2088FF?logo=githubactions&logoColor=white)
+
 ### Data Platform and Notebook Runtime
 
 - Databricks Workspace
@@ -65,6 +87,11 @@ This section inventories all major technologies used across notebooks, jobs, pip
 - MLflow (experiment tracking in forecast workflow)
 
 ### Data and Modeling Libraries (Notebook Layer)
+
+![PySpark](https://img.shields.io/badge/PySpark-Distributed%20Compute-E25A1C?logo=apachespark&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-DataFrame-150458?logo=pandas&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-Numerical-013243?logo=numpy&logoColor=white)
+![yfinance](https://img.shields.io/badge/yfinance-Market%20Data-2E7D32)
 
 - Python 3.x (Databricks runtime)
 - `pyspark`
@@ -84,6 +111,11 @@ This section inventories all major technologies used across notebooks, jobs, pip
 
 From `backend/requirements.txt`:
 
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
+![Uvicorn](https://img.shields.io/badge/Uvicorn-ASGI-4051B5)
+![Requests](https://img.shields.io/badge/Requests-HTTP-4A4A55)
+![dotenv](https://img.shields.io/badge/python--dotenv-Config-ECD53F?logo=python&logoColor=black)
+
 - `fastapi==0.115.6`
 - `uvicorn[standard]==0.32.1`
 - `python-dotenv==1.0.1`
@@ -100,6 +132,10 @@ Related backend capabilities:
 
 From `frontend/package.json`:
 
+![React](https://img.shields.io/badge/React-UI-61DAFB?logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-Bundler-646CFF?logo=vite&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-Static%20Serving-009639?logo=nginx&logoColor=white)
+
 - React 18
 - React DOM 18
 - Vite 5
@@ -111,6 +147,10 @@ Production serving:
 
 ### Infrastructure and Deployment
 
+![Docker](https://img.shields.io/badge/Docker-Containers-2496ED?logo=docker&logoColor=white)
+![Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Caddy](https://img.shields.io/badge/Caddy-Reverse%20Proxy-1F88C0?logo=caddy&logoColor=white)
+
 - Docker
 - Docker Compose v2
 - Caddy 2 (automatic HTTPS/TLS)
@@ -118,6 +158,11 @@ Production serving:
 - Linux host deployment model
 
 ### CI/CD and Source Control
+
+![Git](https://img.shields.io/badge/Git-Version%20Control-F05032?logo=git&logoColor=white)
+![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub-Actions-2088FF?logo=githubactions&logoColor=white)
+![SSH](https://img.shields.io/badge/SSH-Remote%20Deploy-4D4D4D?logo=gnubash&logoColor=white)
 
 - Git
 - GitHub
