@@ -13,6 +13,7 @@ frontend/dist/
 
 # VS Code
 .vscode/
+.claude/
 
 # Temporary artifacts
 .tmp_dbx_nb/
