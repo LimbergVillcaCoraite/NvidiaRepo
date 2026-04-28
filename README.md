@@ -19,15 +19,16 @@ Production-oriented full-stack application for visualizing NVDA Medallion pipeli
 
 1. Overview
 2. Architecture
-3. Repository Structure
-4. Full Technology Stack
-5. Environment Variables
-6. Local Development
-7. Docker Deployment
-8. CI/CD Auto-Deploy
-9. Operations and Verification
-10. Troubleshooting
-11. Security Notes
+3. API Endpoints
+4. Repository Structure
+5. Full Technology Stack
+6. Environment Variables
+7. Local Development
+8. Docker Deployment
+9. CI/CD Auto-Deploy
+10. Operations and Verification
+11. Troubleshooting
+12. Security Notes
 
 ## Overview
 
@@ -49,6 +50,82 @@ High-level data flow:
 - Data platform: Databricks (Unity Catalog + Delta tables + Jobs).
 - Orchestration: Docker Compose.
 - Automation: GitHub Actions auto-deploy on `main`.
+
+## API Endpoints
+
+All endpoints return JSON responses. Base URL: `https://<your-domain>/api` or `http://localhost:8000/api`.
+
+### Health & Diagnostics
+
+- **`GET /api/health`** — Health check.
+  - Response: `{"status": "ok"}`
+
+### Jobs Management
+
+- **`GET /api/databricks/jobs`** — List all Databricks jobs.
+  - Query params: `profile` (optional, defaults from `DATABRICKS_PROFILE`)
+  - Response: `{"count": <int>, "jobs": [...], "profile": <string>}`
+
+- **`GET /api/databricks/jobs/search?name=<name>`** — Search jobs by name.
+  - Query params: `name` (required), `profile` (optional)
+  - Response: `{"count": <int>, "jobs": [...], "query": <string>, "profile": <string>}`
+
+- **`GET /api/databricks/jobs/{job_id}`** — Get details for a specific job.
+  - Path params: `job_id` (required, integer)
+  - Query params: `profile` (optional)
+  - Response: `{"job": {...}, "profile": <string>}`
+
+- **`GET /api/databricks/jobs/{job_id}/runs`** — List runs for a specific job.
+  - Path params: `job_id` (required, integer)
+  - Query params: `limit` (optional, default=20, range 1–100), `profile` (optional)
+  - Response: `{"count": <int>, "runs": [...], "job_id": <int>, "profile": <string>}`
+
+### Forecast Endpoints
+
+- **`GET /api/databricks/forecast/latest?symbol=NVDA`** — Get the latest forecast for a symbol.
+  - Query params: `symbol` (optional, default="NVDA"), `profile` (optional), `warehouse_id` (optional)
+  - Response: `{"symbol": <string>, "row": {...}, "profile": <string>, "warehouse_id": <string>}`
+
+- **`GET /api/databricks/forecast/history?symbol=NVDA&limit=60`** — Get forecast history (up to 500 records).
+  - Query params: `symbol` (optional, default="NVDA"), `limit` (optional, default=60, range 1–500), `profile` (optional), `warehouse_id` (optional)
+  - Response: `{"symbol": <string>, "count": <int>, "rows": [...], "profile": <string>, "warehouse_id": <string>}`
+
+- **`GET /api/databricks/forecast/metrics?symbol=NVDA&limit=20`** — Get forecast model metrics.
+  - Query params: `symbol` (optional, default="NVDA"), `limit` (optional, default=20, range 1–200), `profile` (optional), `warehouse_id` (optional)
+  - Response: `{"symbol": <string>, "count": <int>, "rows": [...], "profile": <string>, "warehouse_id": <string>}`
+
+### Data Quality
+
+- **`GET /api/databricks/bronze/status?symbol=NVDA`** — Check data ingestion status for a symbol.
+  - Query params: `symbol` (optional, default="NVDA"), `profile` (optional), `warehouse_id` (optional)
+  - Response: `{"symbol": <string>, "row": {...}, "profile": <string>, "warehouse_id": <string>}`
+
+### Request Examples
+
+```bash
+# Health check
+curl https://<your-domain>/api/health
+
+# List jobs
+curl 'https://<your-domain>/api/databricks/jobs'
+
+# Get latest NVDA forecast
+curl 'https://<your-domain>/api/databricks/forecast/latest?symbol=NVDA'
+
+# Get forecast history (last 100 records)
+curl 'https://<your-domain>/api/databricks/forecast/history?symbol=NVDA&limit=100'
+
+# Get forecast metrics
+curl 'https://<your-domain>/api/databricks/forecast/metrics?symbol=NVDA'
+
+# Check data ingestion status
+curl 'https://<your-domain>/api/databricks/bronze/status?symbol=NVDA'
+```
+
+### Error Responses
+
+- **422 Unprocessable Entity** — Invalid symbol format (must be 1–10 alphanumeric chars, may include `.`, `_`, `-`).
+- **502 Bad Gateway** — Databricks API error (invalid credentials, warehouse offline, etc.).
 
 ## Repository Structure
 
