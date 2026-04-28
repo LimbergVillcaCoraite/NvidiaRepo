@@ -1,133 +1,171 @@
-# NvidiaRepo
+# NvidiaRepo — Modo God
 
-Full-stack application for viewing the NVDA Medallion pipeline results from Databricks.
+Este repositorio contiene la aplicación completa para visualizar los resultados
+del pipeline NVDA Medallion (Databricks) y desplegarla en producción con HTTPS
+automático mediante `Caddy`.
 
-## Architecture
+Lectura rápida (si tienes prisa):
 
-- Backend: FastAPI with Databricks job and SQL API access
-- Frontend: React (Vite) with Nginx in production
-- Data source: Unity Catalog tables in `workspace.serving`
+- Ramas: `main` = producción. `feature/*` = trabajo en curso.
+- Deploy automático: GitHub Actions dispara un deploy sobre push a `main`.
+- Dominio de producción: `https://statusnvidia.duckdns.org` (Caddy gestiona TLS).
 
-Data flow:
+----
 
-1. The NVDA Medallion pipeline writes results into `workspace.serving.*`.
-2. The backend queries those tables through the Databricks SQL Statements API.
-3. The frontend renders the latest forecast, history, metrics, job status, and the inline analysis view.
+## Arquitectura (resumen)
 
-## Project Structure
+- Backend: `FastAPI` (Uvicorn). Expone endpoints `GET` para salud, jobs y forecasts.
+- Frontend: `React` (Vite) compilado y servido por `nginx` en producción.
+- Reverse proxy público: `Caddy` (ACME: Let's Encrypt/DNS automatico).
+- Orquestación local/servidor: `docker compose` (servicios: backend, frontend, caddy).
 
-- `backend`: FastAPI API, Databricks client, and security configuration
-- `frontend`: responsive React dashboard and inline analysis view
-- `docker-compose.yml`: local production-style orchestration
+Datos y flujo:
 
-## Environment Variables
+1. El pipeline Databricks (NVDA Medallion) escribe en tablas Delta bajo `workspace.serving.*`.
+2. El backend consulta esas tablas mediante la Databricks SQL Statements API.
+3. El frontend consume la API y presenta forecast, histórico, métricas y estado del job.
 
-Configure these backend variables:
+----
 
-- `DATABRICKS_HOST`
-- `DATABRICKS_TOKEN`
-- `DATABRICKS_WAREHOUSE_ID`
+## Cómo uso rápido (desarrollo)
 
-Optional:
+- Backend (Windows/PowerShell):
 
-- `DATABRICKS_PROFILE`
-- `FRONTEND_ORIGINS`
-- `ALLOWED_HOSTS`
-
-See `backend/.env.example` for a quick reference.
-
-## Local Development
-
-### Backend
-
-```bash
+```powershell
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend
+- Frontend:
 
 ```bash
 cd frontend
 npm install
-copy .env.example .env
 npm run dev
 ```
 
-Development URLs:
+URLs de desarrollo:
 
 - Frontend: http://localhost:5173
 - Backend: http://localhost:8000
-- Health check: http://localhost:8000/api/health
+- Health: http://localhost:8000/api/health
 
-## Docker Deployment
+----
 
-The solution is split into two services so they can scale independently:
+## Despliegue con Docker (producción)
 
-- backend (FastAPI)
-- frontend (Nginx + static React build)
-- caddy (public reverse proxy with automatic HTTPS)
+Se asume que el servidor tiene Docker y Docker Compose instalados y el usuario SSH
+puede ejecutar `docker compose` sin pedir TTY interactivo.
 
-### Start the stack
+1. En el servidor clona o sitúa el repo en `~/NvidiaRepo`.
+2. Crea un archivo `.env` en la raíz con al menos:
 
-In PowerShell:
+```text
+DATABRICKS_HOST=https://<your-databricks-host>
+DATABRICKS_TOKEN=dapi<...>
+DATABRICKS_WAREHOUSE_ID=<warehouse-id>
+ALLOWED_HOSTS=localhost,127.0.0.1,statusnvidia.duckdns.org
+FRONTEND_ORIGINS=https://statusnvidia.duckdns.org
+```
+
+3. Inicia:
 
 ```bash
-$env:DATABRICKS_HOST='https://dbc-xxxx.cloud.databricks.com'
-$env:DATABRICKS_TOKEN='dapi...'
-$env:DATABRICKS_WAREHOUSE_ID='c1790544d31644c6'
 docker compose up -d --build
 ```
 
-Docker URLs:
+Notas:
+- Mantén los volúmenes de Caddy (`caddy_data`, `caddy_config`) para conservar certificados.
+- Si necesitas editar `.env` en el servidor, usa `scp` para evitar problemas de comillas/escape.
 
-Local URLs:
+----
 
-- UI: http://localhost:8080
-- API: http://localhost:8000
-- Health check: http://localhost:8000/api/health
+## Deploy automático (GitHub Actions)
 
-### Production domain
+Se ha añadido un workflow en `.github/workflows/auto-deploy.yml` que ejecuta un
+SSH al servidor y realiza `git pull` + `docker compose up -d --build` cuando hay
+un `push` a `main`.
 
-For the production host `statusnvidia.duckdns.org`:
+Configura estos Secrets en GitHub (Repo → Settings → Secrets → Actions):
 
-1. Point the DuckDNS record to the public IP of the server running Docker.
-2. Open or forward ports 80 and 443 to that server.
-3. Copy `.env.example` to `.env` in the repository root, fill in the Databricks credentials, and keep the allowlist below:
+- `SSH_PRIVATE_KEY` — clave privada que GitHub Actions usará para SSH (sin passphrase).
+- `SSH_HOST` — `146.181.36.103`
+- `SSH_USER` — `ubuntu` (u otro usuario con permisos Docker).
+- `REMOTE_REPO_PATH` — ruta al repo en el servidor, e.g. `~/NvidiaRepo`.
+
+Cómo funciona el workflow:
+
+1. Checkout del repo.
+2. `ssh-agent` añade la clave privada provista via secret.
+3. Se hace `ssh $SSH_USER@$SSH_HOST "cd $REMOTE_REPO_PATH && git fetch && git checkout main && git pull origin main && docker compose up -d --build --force-recreate"`.
+
+Recomendación de seguridad: añade la clave pública de `SSH_PRIVATE_KEY` a
+`~/.ssh/authorized_keys` del usuario remoto y restringe su uso (por IP o comandos
+si lo deseas).
+
+----
+
+## Verificaciones y rollback
+
+- Verificar después del deploy:
+	- `docker compose ps` → todos los servicios `Up`.
+	- `curl -I https://statusnvidia.duckdns.org` → `HTTP/2 200` y header `server: Caddy`.
+	- `curl http://127.0.0.1:8000/api/health` → `{"status":"ok"}`.
+
+- Rollback rápido:
 
 ```bash
-ALLOWED_HOSTS=localhost,127.0.0.1,statusnvidia.duckdns.org
-FRONTEND_ORIGINS=https://statusnvidia.duckdns.org,http://localhost:5173,http://127.0.0.1:5173
+cd ~/NvidiaRepo
+git checkout main
+git log --oneline          # identifica el commit previo
+git reset --hard <commit>  # fuerza el rollback
+docker compose up -d --build --force-recreate
 ```
 
-4. Start the stack with `docker compose up -d --build`.
+----
 
-After Caddy obtains the certificate, the app will be available at `https://statusnvidia.duckdns.org` and HTTP will redirect to HTTPS automatically.
+## Problemas comunes
 
-## Main Endpoints
+- HTTP 502 al backend: normalmente archivo `.env` con credenciales inválidas. Reemplazar `.env` por SCP evita errores de comillas.
+- Puertos ocupados al iniciar Docker Compose: procesos `docker-proxy` zombificados. Solución:
 
-- GET /api/health
-- GET /api/databricks/jobs/search?name=NVDA medallion
-- GET /api/databricks/jobs/{job_id}
-- GET /api/databricks/jobs/{job_id}/runs?limit=20
-- GET /api/databricks/forecast/latest?symbol=NVDA
-- GET /api/databricks/forecast/history?symbol=NVDA&limit=60
-- GET /api/databricks/forecast/metrics?symbol=NVDA&limit=20
+```bash
+sudo ss -ltnp | grep 127.0.0.1:8000
+sudo kill -9 <pid>
+```
 
-## Security Notes
+- GitHub Actions: si falla la conexión SSH verifica `SSH_PRIVATE_KEY`/`authorized_keys` y `known_hosts`.
 
-- Strict validation for the `symbol` parameter in the backend
-- Configurable CORS allowlist
-- TrustedHost middleware
-- Security headers in both the backend and Nginx
-- GET-only API surface for lower risk
+----
 
-## Operational Notes
+## Endpoints principales
 
-- The warehouse must be available to execute SQL Statements.
-- If `DATABRICKS_PROFILE` is not used, authentication comes from `DATABRICKS_HOST` and `DATABRICKS_TOKEN`.
-- If the UI does not show results, check `/api/health` first, then the forecast and jobs endpoints.
+- `GET /api/health`
+- `GET /api/databricks/jobs/search?name=NVDA medallion`
+- `GET /api/databricks/jobs/{job_id}`
+- `GET /api/databricks/jobs/{job_id}/runs?limit=20`
+- `GET /api/databricks/forecast/latest?symbol=NVDA`
+
+----
+
+## Notes operativas Databricks
+
+- Perfil usado desde CLI: `DatabricksMain` (si aplica).
+- Job principal: NVDA Medallion Pipeline (job_id: 411768046518265).
+- Para actualizar job settings preferir scripts Python o archivos JSON en lugar de heredocs en PowerShell (evita problemas de escaping).
+
+----
+
+## Si quieres
+
+Si quieres, puedo:
+
+- añadir un `scripts/deploy.sh` remoto y que el workflow lo invoque (recomendado),
+- añadir pasos de smoke tests en el workflow (curl a health + forecast), o
+- automatizar rollback en caso de fallo del smoke test.
+
+Fin.
