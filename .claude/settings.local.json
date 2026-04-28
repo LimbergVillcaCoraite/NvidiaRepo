@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:dbc-cd8ddbc6-3751.cloud.databricks.com)",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); jobs=data.get\\('jobs',[]\\); matched=[j for j in jobs if 'nvda medallion' in j.get\\('settings',{}\\).get\\('name',''\\).lower\\(\\)]; print\\(json.dumps\\(matched, indent=2\\)\\)\")"
+    ]
+  }
+}

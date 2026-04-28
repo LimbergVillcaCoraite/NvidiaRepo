@@ -1,0 +1,33 @@
+name: Auto Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Deploy on push to main
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent and add key
+        uses: webfactory/ssh-agent@v0.8.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          REMOTE_REPO_PATH: ${{ secrets.REMOTE_REPO_PATH }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+            "cd ${REMOTE_REPO_PATH} && git fetch origin && git checkout main && git pull origin main && docker compose up -d --build --force-recreate"

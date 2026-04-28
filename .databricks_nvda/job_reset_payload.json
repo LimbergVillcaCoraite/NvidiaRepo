@@ -1,0 +1,190 @@
+{
+    "job_id":  411768046518265,
+    "new_settings":  {
+                         "email_notifications":  {
+                                                     "no_alert_for_skipped_runs":  true,
+                                                     "on_failure":  [
+                                                                        "limbervillcacoraite@gmail.com"
+                                                                    ],
+                                                     "on_start":  [
+                                                                      "limbervillcacoraite@gmail.com"
+                                                                  ],
+                                                     "on_success":  [
+                                                                        "limbervillcacoraite@gmail.com"
+                                                                    ]
+                                                 },
+                         "format":  "MULTI_TASK",
+                         "max_concurrent_runs":  1,
+                         "name":  "NVDA Medallion Pipeline",
+                         "notification_settings":  {
+                                                       "no_alert_for_canceled_runs":  true,
+                                                       "no_alert_for_skipped_runs":  true
+                                                   },
+                         "performance_target":  "PERFORMANCE_OPTIMIZED",
+                         "queue":  {
+                                       "enabled":  true
+                                   },
+                         "schedule":  {
+                                          "pause_status":  "UNPAUSED",
+                                          "quartz_cron_expression":  "5 0 17 * * ?",
+                                          "timezone_id":  "America/La_Paz"
+                                      },
+                         "tasks":  [
+                                       {
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "bronze_schema":  "bronze",
+                                                                                         "catalog":  "workspace",
+                                                                                         "source_interval":  "1d",
+                                                                                         "symbol":  "NVDA"
+                                                                                     },
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/01_Bronze_Yahoo_NVDA",
+                                                                 "source":  "WORKSPACE"
+                                                             },
+                                           "run_if":  "ALL_SUCCESS",
+                                           "task_key":  "bronze_ingestion",
+                                           "timeout_seconds":  3600,
+                                           "webhook_notifications":  {
+
+                                                                     }
+                                       },
+                                       {
+                                           "depends_on":  [
+                                                              {
+                                                                  "task_key":  "bronze_ingestion"
+                                                              }
+                                                          ],
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "bronze_schema":  "bronze",
+                                                                                         "catalog":  "workspace",
+                                                                                         "silver_schema":  "silver"
+                                                                                     },
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/02_Silver_Yahoo_NVDA",
+                                                                 "source":  "WORKSPACE"
+                                                             },
+                                           "run_if":  "ALL_SUCCESS",
+                                           "task_key":  "silver_transform",
+                                           "timeout_seconds":  3600,
+                                           "webhook_notifications":  {
+
+                                                                     }
+                                       },
+                                       {
+                                           "depends_on":  [
+                                                              {
+                                                                  "task_key":  "silver_transform"
+                                                              }
+                                                          ],
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "catalog":  "workspace",
+                                                                                         "gold_schema":  "gold",
+                                                                                         "silver_schema":  "silver"
+                                                                                     },
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/03_Gold_Yahoo_NVDA",
+                                                                 "source":  "WORKSPACE"
+                                                             },
+                                           "run_if":  "ALL_SUCCESS",
+                                           "task_key":  "gold_serving",
+                                           "timeout_seconds":  3600,
+                                           "webhook_notifications":  {
+
+                                                                     }
+                                       },
+                                       {
+                                           "depends_on":  [
+                                                              {
+                                                                  "task_key":  "gold_serving"
+                                                              }
+                                                          ],
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "catalog":  "workspace",
+                                                                                         "forecast_horizon":  "30",
+                                                                                         "gold_schema":  "gold",
+                                                                                         "min_std_threshold":  "0.0001",
+                                                                                         "symbol":  "NVDA"
+                                                                                     },
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/04_Forecast_NVDA_30d",
+                                                                 "source":  "WORKSPACE"
+                                                             },
+                                           "run_if":  "ALL_SUCCESS",
+                                           "task_key":  "forecast_30d",
+                                           "timeout_seconds":  5400,
+                                           "webhook_notifications":  {
+
+                                                                     }
+                                       },
+                                       {
+                                           "depends_on":  [
+                                                              {
+                                                                  "task_key":  "forecast_30d"
+                                                              }
+                                                          ],
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "catalog":  "workspace",
+                                                                                         "gold_schema":  "gold",
+                                                                                         "serving_schema":  "serving",
+                                                                                         "symbol":  "NVDA",
+                                                                                         "pipeline_run_id":  "{{job.run_id}}"
+                                                                                     },
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/05_Expose_NVDA_Predictions",
+                                                                 "source":  "WORKSPACE"
+                                                             },
+                                           "run_if":  "ALL_SUCCESS",
+                                           "task_key":  "expose_predictions",
+                                           "timeout_seconds":  3600,
+                                           "webhook_notifications":  {
+
+                                                                     }
+                                       },
+                                       {
+                                           "task_key":  "quality_report",
+                                           "depends_on":  [
+                                                              {
+                                                                  "task_key":  "expose_predictions"
+                                                              }
+                                                          ],
+                                           "webhook_notifications":  {
+
+                                                                     },
+                                           "notebook_task":  {
+                                                                 "base_parameters":  {
+                                                                                         "catalog":  "workspace",
+                                                                                         "serving_schema":  "serving",
+                                                                                         "symbol":  "NVDA",
+                                                                                         "pipeline_run_id":  "{{job.run_id}}"
+                                                                                     },
+                                                                 "source":  "WORKSPACE",
+                                                                 "notebook_path":  "/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/07_Data_Quality_Report"
+                                                             },
+                                           "timeout_seconds":  1800,
+                                           "email_notifications":  {
+
+                                                                   },
+                                           "run_if":  "ALL_SUCCESS"
+                                       }
+                                   ],
+                         "timeout_seconds":  0,
+                         "webhook_notifications":  {
+
+                                                   }
+                     }
+}
