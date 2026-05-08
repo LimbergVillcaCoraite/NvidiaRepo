@@ -123,7 +123,7 @@ def ensure_silver_tables() -> None:
     PARTITIONED BY (symbol)
     TBLPROPERTIES (
         'layer'='silver',
-        'table_type'='rejects',
+        'rejects'='true',
         'delta.autoOptimize.optimizeWrite'='true',
         'delta.autoOptimize.autoCompact'='true'
     )

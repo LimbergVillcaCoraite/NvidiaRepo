@@ -51,6 +51,20 @@ forecast_table = f"{catalog}.{gold_schema}.equity_prices_30d_forecast"
 metrics_table = f"{catalog}.{gold_schema}.equity_prices_30d_forecast_metrics"
 
 
+def resolve_pipeline_run_id() -> str:
+    try:
+        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+        if ctx.jobRunId().isDefined():
+            return str(ctx.jobRunId().get())
+    except Exception:
+        pass
+    return "interactive"
+
+
+pipeline_run_id = resolve_pipeline_run_id()
+logger = setup_pipeline_logger("04_Forecast", pipeline_run_id)
+
+
 def get_latest_gold_watermark(table_name: str, column_name: str):
     try:
         if not spark.catalog.tableExists(table_name):
@@ -65,9 +79,6 @@ def get_latest_gold_watermark(table_name: str, column_name: str):
     except Exception:
         return None
 
-
-pipeline_run_id = resolve_pipeline_run_id()
-logger = setup_pipeline_logger("04_Forecast", pipeline_run_id)
 
 latest_gold_refresh_ts = get_latest_gold_watermark(gold_daily_table, "gold_refresh_ts")
 latest_gold_date = get_latest_gold_watermark(gold_daily_table, "date")
@@ -121,19 +132,6 @@ if (raw_df["close"] <= 0).any():
 
 if (raw_df["volume"] < 0).any():
     raise ValueError("Datos invalidos: volume debe ser >= 0")
-
-
-def resolve_pipeline_run_id() -> str:
-    try:
-        ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-        if ctx.jobRunId().isDefined():
-            return str(ctx.jobRunId().get())
-    except Exception:
-        pass
-    return "interactive"
-
-
-pipeline_run_id = resolve_pipeline_run_id()
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
