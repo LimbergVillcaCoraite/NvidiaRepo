@@ -3,9 +3,16 @@
 
 # COMMAND ----------
 
+"""
+=== 04_FORECAST_NVDA_30D.PY - Modelo de Series de Tiempo ===
+Propósito: Entrenar modelos ensemble (ElasticNet, RF, GB, XGBoost) y generar 30d forecasts.
+Lineage: source_gold_refresh_ts tracked para detección de correcciones.
+"""
+
 import numpy as np
 import pandas as pd
 import mlflow
+from pyspark.sql import functions as F
 from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.linear_model import ElasticNet
@@ -17,6 +24,12 @@ try:
     HAS_XGB = True
 except Exception:
     HAS_XGB = False
+
+# COMMAND ----------
+
+%run /Workspace/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/00_Common_Helpers
+
+# COMMAND ----------
 
 # Parametros (widgets)
 dbutils.widgets.text("catalog", "workspace")
@@ -37,19 +50,66 @@ gold_daily_table = f"{catalog}.{gold_schema}.equity_prices_daily_features"
 forecast_table = f"{catalog}.{gold_schema}.equity_prices_30d_forecast"
 metrics_table = f"{catalog}.{gold_schema}.equity_prices_30d_forecast_metrics"
 
+
+def get_latest_gold_watermark(table_name: str, column_name: str):
+    try:
+        if not spark.catalog.tableExists(table_name):
+            return None
+        rows = (
+            spark.table(table_name)
+            .filter(F.col("symbol") == F.lit(symbol))
+            .select(F.max(F.col(column_name)).alias("latest_value"))
+            .collect()
+        )
+        return rows[0]["latest_value"] if rows and rows[0]["latest_value"] is not None else None
+    except Exception:
+        return None
+
+
+pipeline_run_id = resolve_pipeline_run_id()
+logger = setup_pipeline_logger("04_Forecast", pipeline_run_id)
+
+latest_gold_refresh_ts = get_latest_gold_watermark(gold_daily_table, "gold_refresh_ts")
+latest_gold_date = get_latest_gold_watermark(gold_daily_table, "date")
+add_missing_columns(spark, forecast_table, ["source_gold_refresh_ts TIMESTAMP", "forecast_refresh_ts TIMESTAMP"])
+add_missing_columns(spark, metrics_table, ["source_gold_refresh_ts TIMESTAMP", "forecast_refresh_ts TIMESTAMP"])
+
+from datetime import datetime, timedelta as _timedelta
+_fetch_start = (datetime.now() - _timedelta(days=365 * 7)).strftime("%Y-%m-%d")
 raw_df = (
     spark.table(gold_daily_table)
     .filter(f"symbol = '{symbol}'")
+    .filter(F.col("date") >= F.lit(_fetch_start))
     .select("date", "close", "volume")
     .orderBy("date")
     .toPandas()
 )
+log_step(logger, "gold_data_loaded", {"rows": len(raw_df), "fetch_start": _fetch_start})
 
 if raw_df.empty:
     raise ValueError(f"Sin datos para {symbol} en {gold_daily_table}")
 
 raw_df["date"] = pd.to_datetime(raw_df["date"])
 raw_df = raw_df.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+
+existing_forecast_gold_refresh_ts = None
+try:
+    if spark.catalog.tableExists(forecast_table):
+        existing_forecast_gold_refresh_ts = (
+            spark.table(forecast_table)
+            .filter(F.col("symbol") == F.lit(symbol))
+            .select(F.max(F.col("source_gold_refresh_ts")).alias("latest_source_gold_refresh_ts"))
+            .collect()[0]["latest_source_gold_refresh_ts"]
+        )
+except Exception:
+    existing_forecast_gold_refresh_ts = None
+
+if latest_gold_refresh_ts is not None and existing_forecast_gold_refresh_ts is not None:
+    if pd.Timestamp(latest_gold_refresh_ts) <= pd.Timestamp(existing_forecast_gold_refresh_ts):
+        print(
+            f"Forecast ya actualizado para {symbol}: gold_refresh_ts={latest_gold_refresh_ts}, forecast_source_gold_refresh_ts={existing_forecast_gold_refresh_ts}"
+        )
+        dbutils.notebook.exit("no_new_forecast")
 
 required_cols = ["date", "close", "volume"]
 for col in required_cols:
@@ -163,6 +223,8 @@ with mlflow.start_run(run_name=f"{symbol}_forecast_30d"):
             "model_name": best_model_name,
             "cv_mae": float(best_cv_mae),
             "pipeline_run_id": pipeline_run_id,
+            "source_gold_refresh_ts": latest_gold_refresh_ts,
+            "forecast_refresh_ts": pd.Timestamp.utcnow(),
         })
         hist_df = pd.concat([hist_df, pd.DataFrame({"date": [next_dt], "close": [pred_close], "volume": [hist_df["volume"].iloc[-1]]})], ignore_index=True)
 
@@ -178,7 +240,23 @@ with mlflow.start_run(run_name=f"{symbol}_forecast_30d"):
     })
     mlflow.set_tag("selected_model", best_model_name)
 
-    spark.createDataFrame(forecast_df).write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(forecast_table)
+    forecast_out_df = spark.createDataFrame(forecast_df)
+    if spark.catalog.tableExists(forecast_table):
+        from delta.tables import DeltaTable
+
+        forecast_target = DeltaTable.forName(spark, forecast_table)
+        (
+            forecast_target.alias("t")
+            .merge(
+                forecast_out_df.alias("s"),
+                "t.symbol = s.symbol AND t.forecast_date = s.forecast_date AND t.horizon_day = s.horizon_day",
+            )
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+    else:
+        forecast_out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(forecast_table)
     metrics_df = pd.DataFrame([{
         "symbol": symbol,
         "selected_model": best_model_name,
@@ -186,8 +264,23 @@ with mlflow.start_run(run_name=f"{symbol}_forecast_30d"):
         "pred_std": std_pred,
         "train_rows": int(len(train_df)),
         "pipeline_run_id": pipeline_run_id,
+        "source_gold_refresh_ts": latest_gold_refresh_ts,
+        "forecast_refresh_ts": pd.Timestamp.utcnow(),
     }])
-    spark.createDataFrame(metrics_df).write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(metrics_table)
+    metrics_out_df = spark.createDataFrame(metrics_df)
+    if spark.catalog.tableExists(metrics_table):
+        from delta.tables import DeltaTable
+
+        metrics_target = DeltaTable.forName(spark, metrics_table)
+        (
+            metrics_target.alias("t")
+            .merge(metrics_out_df.alias("s"), "t.symbol = s.symbol")
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+    else:
+        metrics_out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(metrics_table)
 
 print(f"Forecast guardado: {forecast_table}")
 print(f"Metricas guardadas: {metrics_table}")

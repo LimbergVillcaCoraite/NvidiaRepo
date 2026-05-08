@@ -1,16 +1,18 @@
 # Databricks notebook source
-# MAGIC %md
-# MAGIC # Expose NVDA Forecast Data (Serving Layer)
-# MAGIC
-# MAGIC Objetivo:
-# MAGIC - Publicar una capa de consumo estable en Databricks
-# MAGIC - Exponer la ultima prediccion y el historial de pronosticos
-# MAGIC - Dejar vistas/tablas listas para Databricks SQL, dashboards o consumers externos
-
-# COMMAND ----------
+"""
+=== 05_EXPOSE_NVDA_PREDICTIONS.PY - Serving Layer ===
+Propósito: Publicar predicciones + métricas en capa de consumo estable.
+Salida: nvda_forecast_latest, nvda_forecast_history, nvda_serving_status, vw_nvda_forecast_latest.
+"""
 
 from pyspark.sql import functions as F
 from delta.tables import DeltaTable
+
+# COMMAND ----------
+
+%run /Workspace/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/00_Common_Helpers
+
+# COMMAND ----------
 
 # Parametros (widgets)
 dbutils.widgets.text("catalog", "workspace")
@@ -50,6 +52,12 @@ serving_status_table = f"{catalog}.{serving_schema}.nvda_serving_status"
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{serving_schema}")
 
+
+add_missing_columns(spark, serving_latest_table, ["source_forecast_refresh_ts TIMESTAMP", "serving_refresh_ts TIMESTAMP"])
+add_missing_columns(spark, serving_history_table, ["serving_refresh_ts TIMESTAMP"])
+add_missing_columns(spark, serving_metrics_table, ["source_forecast_refresh_ts TIMESTAMP", "serving_refresh_ts TIMESTAMP"])
+add_missing_columns(spark, serving_status_table, ["source_forecast_refresh_ts TIMESTAMP"])
+
 # COMMAND ----------
 
 # Cargar predicciones y metricas desde Gold
@@ -65,7 +73,13 @@ metrics_df = (
     .withColumn("loaded_ts", F.current_timestamp())
 )
 
-if forecast_df.limit(1).count() == 0:
+source_forecast_refresh_ts = None
+try:
+    source_forecast_refresh_ts = forecast_df.select(F.max(F.col("source_gold_refresh_ts")).alias("source_gold_refresh_ts")).collect()[0]["source_gold_refresh_ts"]
+except Exception:
+    source_forecast_refresh_ts = None
+
+if forecast_df.isEmpty():
     raise ValueError(f"No hay predicciones disponibles para {symbol} en {forecast_table}")
 
 invalid_rows = forecast_df.filter(
@@ -92,7 +106,7 @@ history_df = forecast_df.select(
     "model_name",
     "cv_mae",
     "forecast_ts",
-).withColumn("pipeline_run_id", F.lit(pipeline_run_id))
+).withColumn("pipeline_run_id", F.lit(pipeline_run_id)).withColumn("serving_refresh_ts", F.current_timestamp())
 
 if spark.catalog.tableExists(serving_history_table):
     history_target = DeltaTable.forName(spark, serving_history_table)
@@ -124,13 +138,40 @@ latest_df = (
         F.col("cv_mae"),
         F.current_timestamp().alias("exposed_ts"),
         F.lit(pipeline_run_id).alias("pipeline_run_id"),
+        F.lit(source_forecast_refresh_ts).cast("timestamp").alias("source_forecast_refresh_ts"),
+        F.current_timestamp().alias("serving_refresh_ts"),
     )
 )
 
-latest_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(serving_latest_table)
+if spark.catalog.tableExists(serving_latest_table):
+    latest_target = DeltaTable.forName(spark, serving_latest_table)
+    (
+        latest_target.alias("t")
+        .merge(latest_df.alias("s"), "t.symbol = s.symbol")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+else:
+    latest_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(serving_latest_table)
 
-metrics_out_df = metrics_df.withColumn("pipeline_run_id", F.lit(pipeline_run_id))
-metrics_out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(serving_metrics_table)
+metrics_out_df = (
+    metrics_df
+    .withColumn("pipeline_run_id", F.lit(pipeline_run_id))
+    .withColumn("source_forecast_refresh_ts", F.lit(source_forecast_refresh_ts).cast("timestamp"))
+    .withColumn("serving_refresh_ts", F.current_timestamp())
+)
+if spark.catalog.tableExists(serving_metrics_table):
+    metrics_target = DeltaTable.forName(spark, serving_metrics_table)
+    (
+        metrics_target.alias("t")
+        .merge(metrics_out_df.alias("s"), "t.symbol = s.symbol")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+else:
+    metrics_out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(serving_metrics_table)
 
 status_df = spark.createDataFrame([
     {
@@ -139,6 +180,7 @@ status_df = spark.createDataFrame([
         "pipeline_run_id": pipeline_run_id,
         "history_rows": int(history_df.count()),
         "metrics_rows": int(metrics_out_df.count()),
+        "source_forecast_refresh_ts": source_forecast_refresh_ts,
     }
 ]).withColumn("updated_ts", F.current_timestamp())
 
@@ -161,8 +203,17 @@ spark.sql(f"CREATE VIEW {serving_view} AS SELECT * FROM {serving_latest_table}")
 # COMMAND ----------
 
 # Optimizar tablas de serving
-spark.sql(f"OPTIMIZE {serving_history_table} ZORDER BY (symbol, forecast_date)")
-spark.sql(f"OPTIMIZE {serving_latest_table} ZORDER BY (symbol)")
+optimize_table(spark, serving_history_table, zorder_columns=["symbol", "forecast_date"])
+optimize_table(spark, serving_latest_table, zorder_columns=["symbol"])
+
+set_table_properties(spark, serving_history_table, {
+    "delta.autoOptimize.optimizeWrite": "true",
+    "delta.autoOptimize.autoCompact": "true"
+})
+set_table_properties(spark, serving_latest_table, {
+    "delta.autoOptimize.optimizeWrite": "true",
+    "delta.autoOptimize.autoCompact": "true"
+})
 
 print(f"Serving latest: {serving_latest_table}")
 print(f"Serving history: {serving_history_table}")

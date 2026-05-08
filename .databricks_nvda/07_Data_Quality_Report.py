@@ -1,16 +1,18 @@
 # Databricks notebook source
-# MAGIC %md
-# MAGIC # Data Quality & Serving Report
-# MAGIC
-# MAGIC Objetivo:
-# MAGIC - Validar freshness y consistencia minima de tablas de serving
-# MAGIC - Publicar un resumen operacional para monitoreo rapido
-
-# COMMAND ----------
+"""
+=== 07_DATA_QUALITY_REPORT.PY - Auditoría de Pipeline ===
+Propósito: Validar freshness, completitud y consistencia del serving layer.
+Output: nvda_quality_report (append-only audit table).
+"""
 
 from pyspark.sql import functions as F
 
-# Parametros (widgets)
+# COMMAND ----------
+
+%run /Workspace/Repos/limbervillcacoraite@gmail.com/NVDA_Medallion/00_Common_Helpers
+
+# COMMAND ----------
+
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("serving_schema", "serving")
 dbutils.widgets.text("symbol", "NVDA")
@@ -20,6 +22,8 @@ catalog = dbutils.widgets.get("catalog")
 serving_schema = dbutils.widgets.get("serving_schema")
 symbol = dbutils.widgets.get("symbol")
 pipeline_run_id = dbutils.widgets.get("pipeline_run_id")
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{serving_schema}")
 
 
 def resolve_pipeline_run_id() -> str:
@@ -41,6 +45,26 @@ serving_history_table = f"{catalog}.{serving_schema}.nvda_forecast_history"
 serving_metrics_table = f"{catalog}.{serving_schema}.nvda_forecast_metrics"
 serving_status_table = f"{catalog}.{serving_schema}.nvda_serving_status"
 quality_report_table = f"{catalog}.{serving_schema}.nvda_quality_report"
+
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {quality_report_table} (
+    symbol STRING,
+    pipeline_run_id STRING,
+    latest_rows BIGINT,
+    history_rows BIGINT,
+    metrics_rows BIGINT,
+    status_rows BIGINT,
+    quality_status STRING,
+    source_forecast_refresh_ts TIMESTAMP,
+    report_ts TIMESTAMP
+)
+USING DELTA
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite'='true',
+    'delta.autoOptimize.autoCompact'='true'
+)
+""")
+add_missing_columns(spark, quality_report_table, ["source_forecast_refresh_ts TIMESTAMP"])
 
 required_tables = [
     serving_latest_table,
@@ -96,6 +120,7 @@ report_df = spark.createDataFrame([
         "metrics_rows": int(metrics_count),
         "status_rows": int(status_count),
         "quality_status": "PASS",
+        "source_forecast_refresh_ts": latest_exposed_ts,
     }
 ]).withColumn("report_ts", F.current_timestamp())
 
